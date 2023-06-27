@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using Prepatcher;
 using RimWorld;
 using Verse;
 
@@ -8,59 +9,71 @@ namespace MVCF.Utilities;
 
 public static class PawnVerbUtility
 {
-    private static readonly ConditionalWeakTable<Pawn, VerbManager> managers = new();
+    private static readonly ConditionalWeakTable<Pawn, StrongBox<VerbManager>> managers = new();
+
+    [PrepatcherField]
+    private static ref VerbManager VerbManager(this Pawn pawn)
+    {
+        if (!managers.TryGetValue(pawn, out var box))
+        {
+            box = new StrongBox<VerbManager>();
+            managers.Add(pawn, box);
+        }
+
+        return ref box.Value;
+    }
 
     public static VerbManager Manager(this Pawn p, bool createIfMissing = true)
     {
         if (p == null) return null;
-        if (managers.TryGetValue(p, out var manager) && manager is not null) return manager;
+        ref var manager = ref p.VerbManager();
+        if (manager is not null) return manager;
         if (!createIfMissing) return null;
         manager = new VerbManager();
-        manager.Initialize(p);
-        managers.Add(p, manager);
+        manager.Initialize(p, false);
         return manager;
     }
 
     public static void SaveManager(this Pawn pawn)
     {
-        if (managers.TryGetValue(pawn, out var man)) managers.Remove(pawn);
-        else man = null;
-        Scribe_Deep.Look(ref man, "MVCF_VerbManager");
-        if (man is null) return;
-        managers.Add(pawn, man);
-        if (Scribe.mode == LoadSaveMode.PostLoadInit) man.Initialize(pawn);
+        ref var manager = ref pawn.VerbManager();
+        Scribe_Deep.Look(ref manager, "MVCF_VerbManager");
+        if (manager is null) return;
+        if (Scribe.mode == LoadSaveMode.PostLoadInit) manager.Initialize(pawn, true);
     }
-
-
-    // private static void PrepatchedSaveManager(Pawn p)
-    // {
-    //     Scribe_Deep.Look(ref p.MVCF_VerbManager, "MVCF_VerbManager");
-    //     if (Scribe.mode == LoadSaveMode.PostLoadInit) p.MVCF_VerbManager?.Initialize(p);
-    // }
 
     public static Verb BestVerbForTarget(this Pawn p, LocalTargetInfo target, IEnumerable<ManagedVerb> verbs) =>
         p.Manager().ChooseVerb(target, verbs.ToList())?.Verb;
 
-    public static int GetDamage(this Verb verb)
+    public static Verb GetAttackVerb(this Pawn pawn, Thing target, bool allowManualCastWeapons = false)
     {
-        switch (verb)
-        {
-            case Verb_LaunchProjectile launch:
-                return launch.Projectile.projectile.GetDamageAmount(1f);
-            case Verb_Bombardment _:
-            case Verb_PowerBeam _:
-            case Verb_MechCluster _:
-                return int.MaxValue;
-            case Verb_CastAbility cast:
-                return cast.ability.EffectComps.Count * 100;
-            default:
-                return 1;
-        }
-    }
-}
+        var manager = pawn.Manager();
+        var job = pawn.CurJob;
 
-public interface IVerbScore
-{
-    float GetScore(Pawn pawn, LocalTargetInfo target);
-    bool ForceUse(Pawn pawn, LocalTargetInfo target);
+        MVCF.LogFormat($"AttackVerb of {pawn} on target {target} with job {job} that has target {job?.targetA} and CurrentVerb {manager.CurrentVerb}",
+            LogLevel.Info);
+
+        if (manager.CurrentVerb != null && manager.CurrentVerb.Available() &&
+            (target == null || manager.CurrentVerb.CanHitTarget(target)) &&
+            (job is not { targetA: { IsValid: true, Cell: var cell } } || cell == pawn.Position || !cell.InBounds(pawn.Map) ||
+             manager.CurrentVerb.CanHitTarget(job.targetA)))
+            return manager.CurrentVerb;
+
+        var verbs = manager.CurrentlyUseableRangedVerbs;
+        if (!allowManualCastWeapons && job != null && (job.def == JobDefOf.Wait_Combat || (manager.CurrentVerb != null && job.def == JobDefOf.AttackStatic)))
+            verbs = verbs.Where(v => !v.Verb.verbProps.onlyManualCast);
+
+        var verbsToUse = verbs.ToList();
+        var usedTarget = target ?? job?.targetA ?? LocalTargetInfo.Invalid;
+
+        MVCF.LogFormat($"Getting best verb for target {target} or {job?.targetA} which is {usedTarget} from {verbsToUse.Count} choices", LogLevel.Info);
+
+        if (!usedTarget.IsValid || !usedTarget.Cell.InBounds(pawn.Map)) return null;
+        return verbsToUse.Count switch
+        {
+            0 => null,
+            1 => verbsToUse[0].Verb,
+            _ => pawn.BestVerbForTarget(usedTarget, verbsToUse)
+        };
+    }
 }

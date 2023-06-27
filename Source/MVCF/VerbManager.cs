@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Linq;
-using MVCF.Comps;
 using MVCF.Features;
 using MVCF.Utilities;
 using RimWorld;
@@ -11,9 +10,6 @@ namespace MVCF;
 
 public class VerbManager : IExposable
 {
-    private static readonly Dictionary<ThingWithComps, bool> preferMeleeCache =
-        new();
-
     private readonly List<IVerbManagerComp> comps = new();
 
     private readonly List<ManagedVerb> drawVerbs = new();
@@ -29,24 +25,15 @@ public class VerbManager : IExposable
             !v.Verb.IsMeleeAttack && !v.Independent && v.Enabled &&
             v.Verb.Available() && (Pawn.IsColonist || v.Props is not { colonistOnly: true }));
 
-    public bool ShouldBrawlerUpset => BrawlerHated.Any();
-
-    public IEnumerable<Verb> BrawlerTolerates =>
-        ManagedVerbs.Where(mv => mv.Props is { brawlerCaresAbout: false })
-           .Select(mv => mv.Verb)
-           .Concat(
-                PreferMelee(Pawn.equipment.Primary)
-                    ? Pawn.equipment.PrimaryEq?.AllVerbs.Where(v => !v.IsMeleeAttack) ?? new List<Verb>()
-                    : new List<Verb>());
-
-    public IEnumerable<Verb> BrawlerHated => AllRangedVerbs.Except(BrawlerTolerates);
+    public bool ShouldBrawlerUpset => verbs.Any(MeleeVerbUtility.BrawlerUpsetBy);
 
     public IEnumerable<Verb> AllVerbs => verbs.Select(mv => mv.Verb);
-    public IEnumerable<Verb> AllRangedVerbs => verbs.Select(mv => mv.Verb).Where(verb => !verb.IsMeleeAttack);
-
-    public IEnumerable<Verb> AllRangedVerbsNoEquipment => verbs.Where(mv => mv.Source != VerbSource.Equipment).Select(mv => mv.Verb);
 
     public IEnumerable<ManagedVerb> ManagedVerbs => verbs;
+
+    public IEnumerable<Verb> AdditionalMeleeVerbs =>
+        verbs.Where(verb => verb.Verb.IsMeleeAttack && verb.Source is VerbSource.Apparel or VerbSource.Inventory && verb.Verb.IsStillUsableBy(Pawn))
+           .Select(verb => verb.Verb);
 
     public Pawn Pawn { get; private set; }
 
@@ -54,6 +41,7 @@ public class VerbManager : IExposable
     {
         Scribe_References.Look(ref CurrentVerb, "currentVerb");
     }
+
 
     public void Notify_Spawned()
     {
@@ -65,18 +53,7 @@ public class VerbManager : IExposable
         foreach (var verb in verbs) verb.Notify_Despawned();
     }
 
-    public static bool PreferMelee(ThingWithComps eq)
-    {
-        if (eq == null) return false;
-        if (preferMeleeCache.TryGetValue(eq, out var res)) return res;
-
-        res = (eq.TryGetComp<CompEquippable>()?.props as CompProperties_VerbProps ??
-               eq.TryGetComp<Comp_VerbProps>()?.Props)?.ConsiderMelee ?? false;
-        preferMeleeCache.Add(eq, res);
-        return res;
-    }
-
-    public void Initialize(Pawn pawn)
+    public void Initialize(Pawn pawn, bool fromLoad)
     {
         Pawn = pawn;
         NeedsTicking = false;
@@ -123,15 +100,15 @@ public class VerbManager : IExposable
 
     public void AddVerb(Verb verb, VerbSource source)
     {
-        MVCF.LogFormat($"Adding {verb} from {source}", LogLevel.Important);
+        MVCF.LogFormat($"Adding {verb} from {source}", LogLevel.Info);
 
-        if (AllVerbs.Contains(verb))
+        var mv = verb.Managed();
+
+        if (verbs.Contains(mv))
         {
             Log.Warning("[MVCF] Added duplicate verb " + verb);
             return;
         }
-
-        var mv = verb.Managed();
 
         mv.Notify_Added(this, source);
 
@@ -174,7 +151,7 @@ public class VerbManager : IExposable
         var bestScore = 0f;
         foreach (var verb in options)
         {
-            if (verb.Verb is IVerbScore verbScore && verbScore.ForceUse(Pawn, target)) return verb;
+            if (verb.ForceUse(Pawn, target)) return verb;
             var score = verb.GetScore(Pawn, target);
             MVCF.LogFormat($"Score is {score} compared to {bestScore}", LogLevel.Silly);
             if (score <= bestScore) continue;
@@ -182,13 +159,13 @@ public class VerbManager : IExposable
             bestVerb = verb;
         }
 
-        MVCF.LogFormat($"ChooseVerb returning {bestVerb}", LogLevel.Important);
+        MVCF.LogFormat($"ChooseVerb returning {bestVerb}", LogLevel.Info);
         return bestVerb;
     }
 
     public void RemoveVerb(Verb verb)
     {
-        MVCF.LogFormat($"Removing {verb}", LogLevel.Important);
+        MVCF.LogFormat($"Removing {verb}", LogLevel.Info);
         var mv = verbs.Find(m => m.Verb == verb);
         MVCF.LogFormat($"Found ManagedVerb: {mv}", LogLevel.Silly);
         if (mv == null)
@@ -223,7 +200,7 @@ public class VerbManager : IExposable
 
     public void RecalcSearchVerb()
     {
-        MVCF.Log("RecalcSearchVerb", LogLevel.Important);
+        MVCF.Log("RecalcSearchVerb", LogLevel.Info);
         var verbsToUse = verbs
            .Where(v => v.Enabled && v.Props is not { canFireIndependently: true } && !v.Verb.IsMeleeAttack)
            .ToList();
@@ -232,13 +209,13 @@ public class VerbManager : IExposable
         {
             HasVerbs = false;
             SearchVerb = null;
-            MVCF.Log("No Verbs", LogLevel.Important);
+            MVCF.Log("No Verbs", LogLevel.Info);
             return;
         }
 
         HasVerbs = true;
         SearchVerb = verbsToUse.MaxBy(verb => verb.Verb.verbProps.range)?.Verb;
-        MVCF.LogFormat($"SearchVerb is now {SearchVerb}", LogLevel.Important);
+        MVCF.LogFormat($"SearchVerb is now {SearchVerb}", LogLevel.Info);
     }
 
     public void DrawAt(Vector3 drawPos)

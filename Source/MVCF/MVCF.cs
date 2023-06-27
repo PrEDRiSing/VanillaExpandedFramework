@@ -14,7 +14,6 @@ namespace MVCF;
 public class MVCF : Mod
 {
     private static readonly HashSet<Patch> appliedPatches = new();
-    public static bool Prepatcher;
     public static List<Feature> AllFeatures;
     public static HashSet<string> EnabledFeatures = new();
 
@@ -35,8 +34,6 @@ public class MVCF : Mod
     public MVCF(ModContentPack content) : base(content)
     {
         Harm = new Harmony("legodude17.mvcf");
-        Prepatcher = ModLister.HasActiveModWithName("Prepatcher");
-        if (Prepatcher) Verse.Log.Message("[MVCF] Prepatcher installed, switching");
         LongEventHandler.ExecuteWhenFinished(CollectFeatureData);
         AllFeatures = typeof(Feature).AllSubclassesNonAbstract().Select(type => (Feature)Activator.CreateInstance(type)).ToList();
         features = AllFeatures.ToDictionary(f => f.GetType());
@@ -80,12 +77,12 @@ public class MVCF : Mod
 
     public static void Log(string message, LogLevel level = LogLevel.Verbose)
     {
-        if (DebugMode && level <= LogLevel) Verse.Log.Message($"[MVCF] {message}");
+        if (DebugMode && level <= LogLevel) Verse.Log.Message("[MVCF] " + message);
     }
 
     public static void LogFormat(FormattableString message, LogLevel level = LogLevel.Verbose)
     {
-        if (DebugMode && level <= LogLevel) Verse.Log.Message($"[MVCF] {message}");
+        if (DebugMode && level <= LogLevel) Verse.Log.Message("[MVCF] " + message);
     }
 
     public static T GetFeature<T>() where T : Feature => (T)features[typeof(T)];
@@ -161,6 +158,14 @@ public class ModDef : Def
 
     public bool IgnoreThisMod;
 
+    public ModDef()
+    {
+        label ??= defName;
+        description ??= label;
+    }
+
+    #region BackCompatability
+
     public override IEnumerable<string> ConfigErrors()
     {
 #pragma warning disable CS0612
@@ -172,8 +177,6 @@ public class ModDef : Def
     public override void PostLoad()
     {
         base.PostLoad();
-
-        #region BackCompatability
 
 #pragma warning disable CS0612
 
@@ -190,8 +193,6 @@ public class ModDef : Def
         }
 
 #pragma warning restore CS0612
-
-        #endregion
     }
 
 #pragma warning disable CS0612
@@ -199,6 +200,8 @@ public class ModDef : Def
 
     [Obsolete] public FeatureOpts IgnoredFeatures;
 #pragma warning restore CS0612
+
+    #endregion
 }
 
 [Obsolete]
@@ -219,9 +222,10 @@ public enum LogLevel
     // ReSharper disable once UnusedMember.Global
     None = 0,
     Important = 1,
-    Verbose = 2,
-    Silly = 3,
-    Tick = 4
+    Info = 2,
+    Verbose = 3,
+    Silly = 4,
+    Tick = 5
 }
 
 public class MVCFSettings : ModSettings
@@ -239,7 +243,7 @@ public abstract class PatchSet
     public abstract IEnumerable<Patch> GetPatches();
 }
 
-public struct Patch
+public readonly struct Patch
 {
     private static int numPatches;
     private readonly MethodBase target;

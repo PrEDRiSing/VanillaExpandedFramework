@@ -13,8 +13,8 @@ public class VerbComp_Draw : VerbComp
     private static readonly Vector3 EastEquipOffset = new(0.2f, 0.28f, -0.22f);
     private static readonly Vector3 NorthEquipOffset = new(0f, 0f, -0.11f);
     private static readonly Vector3 SouthEquipOffset = new(0f, 0.0367346928f, -0.22f);
-
     private static readonly Vector3 EquipPointOffset = new(0f, 0f, 0.4f);
+
     private float idleRotationOffset;
     private float idleRotationOffsetTarget;
     private int ticksTillTurn = -1;
@@ -22,9 +22,9 @@ public class VerbComp_Draw : VerbComp
 
     public override bool NeedsDrawing => true;
 
-    public override void Initialize(VerbCompProperties props)
+    public override void Initialize(VerbCompProperties props, bool fromLoad)
     {
-        base.Initialize(props);
+        base.Initialize(props, fromLoad);
         if (Props.idleRotation)
         {
             ticksTillTurn = Props.idleRotationTicks.RandomInRange;
@@ -37,8 +37,7 @@ public class VerbComp_Draw : VerbComp
     public override void DrawOnAt(Pawn p, Vector3 drawPos)
     {
         base.DrawOnAt(p, drawPos);
-        if (p.Dead || !p.Spawned) return;
-        if (Props.onlyWhenDrafted && !p.Drafted) return;
+        if (!ShouldDraw(p)) return;
         drawPos.y += 0.0367346928f;
         var target = PointingTarget(p);
         DrawPointingAt(DrawPos(target, p, drawPos), DrawAngle(target, p, drawPos), Scale(p));
@@ -100,7 +99,7 @@ public class VerbComp_Draw : VerbComp
 
     public virtual LocalTargetInfo PointingTarget(Pawn p)
     {
-        if (p.stances.curStance is Stance_Busy { neverAimWeapon: false, focusTarg: { IsValid: true } } busy)
+        if (p.stances.curStance is Stance_Busy { neverAimWeapon: false, focusTarg.IsValid: true } busy)
             return busy.focusTarg;
         return null;
     }
@@ -125,9 +124,14 @@ public class VerbComp_Draw : VerbComp
         Graphics.DrawMesh(mesh, matrix4X4, Props.Graphic.MatSingle, 0);
     }
 
+    public virtual bool ShouldDraw(Pawn pawn) =>
+        pawn.Spawned && !pawn.Dead && (!Props.onlyWhenDrafted || pawn.Drafted) && (!Props.drawAsEquipment || CarryWeaponOpenly(pawn))
+     && parent.Verb.IsStillUsableBy(pawn) && (parent.Verb.verbProps is not { linkedBodyPartsGroup: { } parts, ensureLinkedBodyPartsGroupAlwaysUsable: false }
+                                           || PawnCapacityUtility.CalculateNaturalPartsAverageEfficiency(pawn.health.hediffSet, parts) > 0f);
+
     private static bool CarryWeaponOpenly(Pawn pawn)
     {
-        if (pawn.carryTracker is { CarriedThing: { } }) return false;
+        if (pawn.carryTracker is { CarriedThing: not null }) return false;
 
         if (pawn.Drafted) return true;
 
@@ -135,8 +139,7 @@ public class VerbComp_Draw : VerbComp
 
         if (pawn.mindState.duty != null && pawn.mindState.duty.def.alwaysShowWeapon) return true;
 
-        var lord = pawn.GetLord();
-        return lord?.LordJob != null && lord.LordJob.AlwaysShowWeapon;
+        return pawn.GetLord()?.LordJob is { AlwaysShowWeapon: true };
     }
 }
 
@@ -152,10 +155,10 @@ public class VerbCompProperties_Draw : VerbCompProperties
     public FloatRange idleRotationAngle;
     public IntRange idleRotationTicks;
     public bool onlyWhenDrafted;
-    private Dictionary<string, Dictionary<BodyTypeDef, DrawPosition>> positions;
-    private Dictionary<string, Dictionary<BodyTypeDef, Scaling>> scale;
     public List<Scaling> scalings;
     public List<DrawPosition> specificPositions;
+    private Dictionary<string, Dictionary<BodyTypeDef, DrawPosition>> positions;
+    private Dictionary<string, Dictionary<BodyTypeDef, Scaling>> scale;
     public Graphic Graphic { get; private set; }
 
     public Vector3 DrawPos(Pawn pawn, Vector3 drawPos, Rot4 rot)
@@ -181,9 +184,9 @@ public class VerbCompProperties_Draw : VerbCompProperties
         return s?.scaling ?? (drawScale == 0 ? 1f : drawScale);
     }
 
-    public override void PostLoadSpecial(VerbProperties verbProps, AdditionalVerbProps additionalProps)
+    public override void PostLoadSpecial(VerbProperties verbProps, AdditionalVerbProps additionalProps, Def parentDef)
     {
-        base.PostLoadSpecial(verbProps, additionalProps);
+        base.PostLoadSpecial(verbProps, additionalProps, parentDef);
         if (graphic != null)
         {
             Graphic = graphic.Graphic;
@@ -226,11 +229,12 @@ public class DrawPosition
     public Vector2 Right = PLACEHOLDER;
     public Vector2 Up = PLACEHOLDER;
 
-    public static DrawPosition Zero => new()
-    {
-        defName = "",
-        Default = Vector2.zero
-    };
+    public static DrawPosition Zero =>
+        new()
+        {
+            defName = "",
+            Default = Vector2.zero
+        };
 
     public Vector3 ForRot(Rot4 rot)
     {

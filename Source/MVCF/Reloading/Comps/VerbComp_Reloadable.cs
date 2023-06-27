@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Xml;
 using HarmonyLib;
 using MVCF.Commands;
 using MVCF.Comps;
@@ -17,6 +18,7 @@ namespace MVCF.Reloading.Comps;
 public class VerbComp_Reloadable : VerbComp
 {
     private static readonly AccessTools.FieldRef<Verb, int> burstShotsLeft = AccessTools.FieldRefAccess<Verb, int>("burstShotsLeft");
+    public bool AutoReload;
     public int ShotsRemaining;
     public VerbCompProperties_Reloadable Props => props as VerbCompProperties_Reloadable;
 
@@ -28,6 +30,7 @@ public class VerbComp_Reloadable : VerbComp
     {
         base.ExposeData();
         Scribe_Values.Look(ref ShotsRemaining, "shotsRemaining");
+        Scribe_Values.Look(ref AutoReload, "autoReload");
     }
 
     public override IEnumerable<CommandPart> GetCommandParts(Command_VerbTargetExtended command)
@@ -72,10 +75,10 @@ public class VerbComp_Reloadable : VerbComp
         if (curTick == ticksTillDone - 2f.SecondsToTicks()) Props.ReloadSound?.PlayOneShot(parent.Verb.caster);
     }
 
-    public override void Initialize(VerbCompProperties props)
+    public override void Initialize(VerbCompProperties props, bool fromLoad)
     {
-        base.Initialize(props);
-        ShotsRemaining = Props.StartLoaded ? Props.MaxShots : 0;
+        base.Initialize(props, fromLoad);
+        if (!fromLoad) ShotsRemaining = Props.StartLoaded ? Props.ItemsPerShot : 0;
     }
 
     public override void Notify_ShotFired()
@@ -114,12 +117,26 @@ public class CommandPart_Reloadable : CommandPart
                          new FloatMenuOption(pair.First.LabelCap, pair.Second)))
                 yield return option;
     }
+
+    public override bool DrawExtraGUIButtons(Rect rect, ref int buttonCount)
+    {
+        buttonCount++;
+        if (Mouse.IsOver(rect)) TooltipHandler.TipRegion(rect, "MVCF.ToggleAutoReload".Translate());
+        if (Widgets.ButtonImage(rect, Reloadable.AutoReload ? Widgets.CheckboxOnTex : Widgets.CheckboxOffTex))
+        {
+            Reloadable.AutoReload = !Reloadable.AutoReload;
+            return true;
+        }
+
+        return false;
+    }
 }
 
 public class VerbCompProperties_Reloadable : VerbCompProperties
 {
     public ThingFilter AmmoFilter;
     public List<ThingDefCountRangeClass> GenerateAmmo;
+    public List<ThingCategoryCountRangeClass> GenerateAmmoCategories;
     public bool GenerateBackupWeapon;
     public int ItemsPerShot;
     public int MaxShots;
@@ -128,19 +145,36 @@ public class VerbCompProperties_Reloadable : VerbCompProperties
     public float ReloadTimePerShot;
     public bool StartLoaded = true;
 
-    public override void ResolveReferences()
+    public override void ResolveReferences(Def parentDef)
     {
-        base.ResolveReferences();
+        base.ResolveReferences(parentDef);
         AmmoFilter.ResolveReferences();
     }
 
-    public override void PostLoadSpecial(VerbProperties verbProps, AdditionalVerbProps additionalProps)
+    public override void PostLoadSpecial(VerbProperties verbProps, AdditionalVerbProps additionalProps, Def parentDef)
     {
-        base.PostLoadSpecial(verbProps, additionalProps);
+        base.PostLoadSpecial(verbProps, additionalProps, parentDef);
         MVCF.EnabledFeatures.Add("Reloading");
         MVCF.EnabledFeatures.Add("VerbComps");
         MVCF.EnabledFeatures.Add("ExtraEquipmentVerbs");
-        ref var type = ref verbProps.verbClass;
-        if (NewVerbClass != null) type = NewVerbClass;
+        if (NewVerbClass != null) verbProps.verbClass = NewVerbClass;
+    }
+}
+
+public class ThingCategoryCountRangeClass
+{
+    public ThingCategoryDef Category;
+    public IntRange Range;
+
+    public void LoadDataFromXmlCustom(XmlNode xmlRoot)
+    {
+        if (xmlRoot.ChildNodes.Count != 1)
+        {
+            Log.Error("Misconfigured ThingCategoryCountRangeClass: " + xmlRoot.OuterXml);
+            return;
+        }
+
+        DirectXmlCrossRefLoader.RegisterObjectWantsCrossRef(this, "Category", xmlRoot.Name);
+        Range = ParseHelper.FromString<IntRange>(xmlRoot.FirstChild.Value);
     }
 }

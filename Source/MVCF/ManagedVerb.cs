@@ -52,12 +52,11 @@ public class ManagedVerb : IExposable, ILoadReferenceable
 
     public virtual void Notify_Despawned() { }
 
-    public virtual void Initialize(Verb verb, AdditionalVerbProps props, IEnumerable<VerbCompProperties> additionalComps)
+    public virtual void Initialize(Verb verb, AdditionalVerbProps props, bool fromLoad, IEnumerable<VerbCompProperties> additionalComps)
     {
         Verb = verb;
         Props = props;
         loadId = $"{verb.loadID}_Managed";
-        this.Register();
         if (Props is { draw: true } && !MVCF.GetFeature<Feature_Drawing>().Enabled)
             Log.Error("[MVCF] Found a verb marked to draw while that feature is not enabled.");
 
@@ -105,7 +104,8 @@ public class ManagedVerb : IExposable, ILoadReferenceable
 
     public virtual IEnumerable<Gizmo> GetGizmos(Thing ownerThing)
     {
-        yield return GetTargetCommand(ownerThing);
+        if (Verb.verbProps.hasStandardCommand)
+            yield return GetTargetCommand(ownerThing);
 
         if (GetToggleType() == ToggleType.Separate)
             yield return GetToggleCommand(ownerThing);
@@ -141,7 +141,6 @@ public class ManagedVerb : IExposable, ILoadReferenceable
     public virtual float GetScore(Pawn p, LocalTargetInfo target)
     {
         MVCF.LogFormat($"Getting score of {Verb} with target {target}", LogLevel.Silly);
-        if (Verb is IVerbScore verbScore) return verbScore.GetScore(p, target);
         var accuracy = 0f;
         if (target.HasThing && !target.Thing.Spawned) target = target.Thing.PositionHeld;
         if (p.Map != null)
@@ -157,9 +156,10 @@ public class ManagedVerb : IExposable, ILoadReferenceable
         MVCF.LogFormat($"timeSpent: {timeSpent}", LogLevel.Silly);
         MVCF.LogFormat($"Score of {Verb} on target {target} is {damage / timeSpent}", LogLevel.Silly);
 
-
         return damage / timeSpent;
     }
+
+    public virtual bool ForceUse(Pawn pawn, LocalTargetInfo target) => false;
 
     public virtual bool PreCastShot() => true;
 }

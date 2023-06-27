@@ -1,13 +1,29 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using MVCF.Comps;
+using MVCF.VerbComps;
+using Prepatcher;
 using Verse;
 
 namespace MVCF.Utilities;
 
 public static class ManagedVerbUtility
 {
-    private static readonly ConditionalWeakTable<Verb, ManagedVerb> managedVerbForVerbs = new();
+    private static readonly ConditionalWeakTable<Verb, StrongBox<ManagedVerb>> managedVerbForVerbs = new();
+
+    [PrepatcherField]
+    private static ref ManagedVerb ManagedVerb(this Verb verb)
+    {
+        if (!managedVerbForVerbs.TryGetValue(verb, out var box))
+        {
+            box = new StrongBox<ManagedVerb>();
+            managedVerbForVerbs.Add(verb, box);
+        }
+
+        return ref box.Value;
+    }
 
     public static ManagedVerb CreateManaged(this AdditionalVerbProps props, bool hasComps)
     {
@@ -21,35 +37,57 @@ public static class ManagedVerbUtility
         return mv;
     }
 
-
     public static void SaveManaged(this Verb verb)
     {
-        if (managedVerbForVerbs.TryGetValue(verb, out var mv)) managedVerbForVerbs.Remove(verb);
-        else mv = null;
-        Scribe_Deep.Look(ref mv, "MVCF_ManagedVerb");
-        managedVerbForVerbs.Add(verb, mv);
+        Scribe_Deep.Look(ref verb.ManagedVerb(), "MVCF_ManagedVerb");
     }
 
-    public static void Register(this ManagedVerb mv)
+    public static void InitializeManaged(this Verb verb, VerbTracker tracker)
     {
-        if (managedVerbForVerbs.TryGetValue(mv.Verb, out var man))
+        AdditionalVerbProps props;
+        IEnumerable<VerbCompProperties> additionalComps;
+        switch (tracker.directOwner)
         {
-            if (man == mv) return;
-            managedVerbForVerbs.Remove(mv.Verb);
+            case CompEquippable comp:
+                props = comp.props is CompProperties_VerbProps compProps
+                    ? compProps.PropsFor(verb)
+                    : comp.parent.TryGetComp<Comp_VerbProps>()?.Props?.PropsFor(verb);
+                additionalComps = comp.parent.AllComps.OfType<VerbComp.IVerbCompProvider>().SelectMany(p => p.GetCompsFor(verb.verbProps));
+                break;
+            case HediffComp_VerbGiver comp:
+                props = (comp as HediffComp_ExtendedVerbGiver)?.PropsFor(verb);
+                additionalComps = comp.parent.comps.OfType<VerbComp.IVerbCompProvider>().SelectMany(p => p.GetCompsFor(verb.verbProps));
+                break;
+            case Comp_VerbGiver comp:
+                props = comp.PropsFor(verb);
+                additionalComps = comp.parent.AllComps.OfType<VerbComp.IVerbCompProvider>().SelectMany(p => p.GetCompsFor(verb.verbProps));
+                break;
+            case Pawn pawn:
+                props = pawn.TryGetComp<Comp_VerbProps>()?.PropsFor(verb);
+                additionalComps = pawn.AllComps.OfType<VerbComp.IVerbCompProvider>().SelectMany(p => p.GetCompsFor(verb.verbProps));
+                break;
+            case CompVerbsFromInventory comp:
+                props = comp.PropsFor(verb);
+                additionalComps = comp.parent.AllComps.OfType<VerbComp.IVerbCompProvider>().SelectMany(p => p.GetCompsFor(verb.verbProps));
+                break;
+            default: return;
         }
 
-        managedVerbForVerbs.Add(mv.Verb, mv);
+        var comps = additionalComps.ToList();
+        var mv = verb.Managed(false) ?? props.CreateManaged(!((props is null || props.comps.NullOrEmpty()) && comps.NullOrEmpty()));
+        mv.Initialize(verb, props, Scribe.mode is LoadSaveMode.ResolvingCrossRefs or LoadSaveMode.PostLoadInit, comps);
+        verb.ManagedVerb() = mv;
     }
 
     public static ManagedVerb Managed(this Verb verb, bool warnOnFailed = true)
     {
         if (verb == null) return null;
-        if (managedVerbForVerbs.TryGetValue(verb, out var mv))
+        var mv = verb.ManagedVerb();
+        if (mv != null)
             return mv;
 
         if (warnOnFailed)
-            Log.ErrorOnce("[MVCF] Attempted to get ManagedVerb for verb " + verb.Label() +
-                          " which does not have one. This may cause issues.", verb.GetHashCode());
+            Log.ErrorOnce($"[MVCF] Attempted to get ManagedVerb for verb {verb.Label()} which does not have one. This may cause issues.", verb.GetHashCode());
 
         return null;
     }
