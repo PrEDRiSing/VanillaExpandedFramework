@@ -1,11 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using RimWorld;
 using UnityEngine;
 using Verse;
+using Verse.Noise;
 
 namespace KCSG
 {
@@ -20,7 +22,7 @@ namespace KCSG
         /// <param name="quest"></param>
         public static void Generate(this TiledStructureDef def, IntVec3 center, Map map, Quest quest = null)
         {
-            GenOption.tiledCenters = new Dictionary<IntVec3, TileDef>();
+            GenOption.tiledRects = new Dictionary<CellRect, TileDef>();
             // Get usables centers
             var usableCenters = new List<IntVec3>();
             var possibleCells = CellRect.CenteredOn(center, ((def.maxSize + def.rectSizeIncrease) / 2) + ((def.maxSize + def.rectSizeIncrease) * def.maxDistanceFromCenter));
@@ -43,6 +45,7 @@ namespace KCSG
             if (!def.centerTileDefs.NullOrEmpty())
             {
                 GenerateTileIn(CellRect.CenteredOn(center, def.maxSize, def.maxSize), map, def.centerTileDefs.RandomElement(), ref usedLayouts);
+                GenerateIncreaseTerrain(def, center, map);
                 usableCenters.Remove(center);
                 usedCenters.Add(center);
                 tilesNumber--;
@@ -61,14 +64,19 @@ namespace KCSG
                 var tile = requiredTiles[i];
                 GetAdjacentIntvec3(def, ref usedCenters, ref usableCenters, out IntVec3 cell);
                 GenerateTileIn(CellRect.CenteredOn(cell, def.maxSize, def.maxSize), map, tile, ref usedLayouts);
+                GenerateIncreaseTerrain(def, cell, map);
                 AddToDict(tile, ref usedTileDefs);
                 tilesNumber--;
             }
             // Generate other tiles
             for (int i = 0; i < tilesNumber; i++)
             {
+                var tile = GetRandomTileDefFrom(def._allowedTileDefs, ref usedTileDefs);
                 GetAdjacentIntvec3(def, ref usedCenters, ref usableCenters, out IntVec3 cell);
-                GenerateTileIn(CellRect.CenteredOn(cell, def.maxSize, def.maxSize), map, GetRandomTileDefFrom(def._allowedTileDefs, ref usedTileDefs), ref usedLayouts);
+                GenerateTileIn(CellRect.CenteredOn(cell, def.maxSize, def.maxSize), map, tile, ref usedLayouts);
+                GenerateIncreaseTerrain(def, cell, map);
+                AddToDict(tile, ref usedTileDefs);
+                tilesNumber--;
             }
         }
 
@@ -125,6 +133,26 @@ namespace KCSG
             used.Add(cell);
         }
 
+        private static void GenerateIncreaseTerrain(TiledStructureDef def, IntVec3 cell, Map map)
+        {
+            if (def.increaseTerrainDef != null)
+            {
+                var fRect = CellRect.CenteredOn(cell, def.maxSize, def.maxSize);
+                var iRect = CellRect.CenteredOn(cell, def.maxSize + def.rectSizeIncrease, def.maxSize + def.rectSizeIncrease);
+                var cells = iRect.Cells.ToList();
+                cells.RemoveAll(c => fRect.Contains(c));
+
+                for (int j = 0; j < cells.Count; j++)
+                {
+                    var c = cells[j];
+                    if (map.terrainGrid.TerrainAt(c).affordances.Contains(TerrainAffordanceDefOf.Bridgeable))
+                        map.terrainGrid.SetTerrain(c, TerrainDefOf.Bridge);
+                    else
+                        map.terrainGrid.SetTerrain(c, def.increaseTerrainDef);
+                }
+            }
+        }
+
         /// <summary>
         /// Generate TileDef in rect
         /// </summary>
@@ -149,7 +177,7 @@ namespace KCSG
             LayoutUtils.CleanRect(layoutDef, map, cellRect, true);
             layoutDef.Generate(cellRect, map);
 
-            GenOption.tiledCenters.Add(cellRect.CenterCell, tileDef);
+            GenOption.tiledRects.Add(cellRect, tileDef);
         }
     }
 }
